@@ -16,7 +16,15 @@ from ..models.simulation import (
     SimulationSnapshot,
 )
 from ..sim_engine.data import load_environment, synthetic_environment
-from ..sim_engine.model import Simulator, SpeciesParams, Environment, DemographyParams as ModelDemographyParams
+from ..sim_engine.model import (
+    Simulator,
+    SpeciesParams,
+    Environment,
+    GridSpec,
+    NicheParams as ModelNicheParams,
+    DemographyParams as ModelDemographyParams,
+    DispersalParams as ModelDispersalParams,
+)
 from .climate_service import ClimateService
 
 logger = get_logger(__name__)
@@ -37,48 +45,81 @@ class SimulationService:
         logger.info("Loading environment", region=config.region, bbox=config.bbox)
         env_data = self.climate_service.get_procedural_climate(config.bbox, config.resolution_deg)
 
+        # Create grid spec
+        n_rows = len(env_data["lats"])
+        n_cols = len(env_data["lons"])
+        grid = GridSpec(
+            west=config.bbox[0],
+            south=config.bbox[1],
+            east=config.bbox[2],
+            north=config.bbox[3],
+            n_rows=n_rows,
+            n_cols=n_cols,
+        )
+
+        # Create environment
         env = Environment(
-            rows=len(env_data["lats"]),
-            cols=len(env_data["lons"]),
+            grid=grid,
             temperature=env_data["temperature"],
             precipitation=env_data["precipitation"],
-            ocean=np.zeros_like(env_data["temperature"], dtype=bool),
         )
 
-        species_params = SpeciesParams(
-            K=config.carrying_capacity,
-            T_opt=config.temperature_opt,
-            T_sd=config.temperature_sigma,
-            P_opt=config.precipitation_opt,
-            P_sd=config.precipitation_sigma,
-            suitability_floor=config.niche_floor,
+        # Create niche parameters
+        niche = ModelNicheParams(
+            t_opt=config.temperature_opt,
+            t_tol=config.temperature_sigma,
+            p_opt=config.precipitation_opt,
+            p_tol=config.precipitation_sigma,
         )
 
+        # Create demography parameters
         demography = ModelDemographyParams(
             r=config.demography.r,
-            m=config.demography.m,
-            allee=config.demography.allee_threshold,
+            K=config.carrying_capacity,
+            mortality=config.demography.m,
+            allee_threshold=config.demography.allee_threshold or 0.0,
         )
 
-        dispersal = {
-            "kernel_type": config.dispersal.kernel_type,
-            "sigma": config.dispersal.sigma,
-            "fraction": config.dispersal.fraction,
-            "alpha": config.dispersal.alpha,
-            "stratified_fraction": config.dispersal.stratified_fraction,
-            "jump_distance": config.dispersal.jump_distance,
-        }
+        # Create dispersal parameters
+        dispersal = ModelDispersalParams(
+            sigma_km=config.dispersal.sigma,
+            kernel=config.dispersal.kernel_type,
+            fraction=config.dispersal.fraction,
+            truncate=3.0,
+        )
+
+        # Create species parameters
+        species_params = SpeciesParams(
+            name=config.species_name,
+            niche=niche,
+            demography=demography,
+            dispersal=dispersal,
+        )
 
         # Create simulator
-        sim = Simulator(env, species_params, demography, dispersal)
+        sim = Simulator(env, species_params)
 
-        # Seed initial population
-        if config.seed_x is not None and config.seed_y is not None:
-            row = int((config.seed_y - env_data["lats"][0]) / config.resolution_deg)
-            col = int((config.seed_x - env_data["lons"][0]) / config.resolution_deg)
-            if 0 <= row < env.rows and 0 <= col < env.cols:
-                sim.population[row, col] = config.carrying_capacity * 0.1
-                logger.info("Seeded population", row=row, col=col)
+        # Seed initial population at center
+        center_lon = (config.bbox[0] + config.bbox[2]) / 2
+        center_lat = (config.bbox[1] + config.bbox[3]) / 2
+        n0 = config.carrying_capacity * 0.1
+
+        success = sim.seed(center_lon, center_lat, n0=n0)
+
+        if not success:
+            logger.warning("Seed failed at specified location, trying region center")
+            # Try with row/col directly
+            success = sim.seed_at(n_rows // 2, n_cols // 2, n0=n0)
+
+        if success:
+            logger.info(
+                "Population seeded",
+                species=config.species_name,
+                initial_pop=float(np.sum(sim.N)),
+                seed_loc=(center_lon, center_lat)
+            )
+        else:
+            logger.error("Failed to seed population at any location")
 
         return sim, env, env_data["lats"]
 
@@ -93,18 +134,24 @@ class SimulationService:
             sim, env, lats = await self.prepare_simulation(config)
 
             snapshots = []
+
+            # Record initial state (step 0) BEFORE any simulation
+            initial_abundance = float(np.sum(sim.N))
+            initial_cells = int(np.sum(sim.N > 0))
+            logger.info("Initial state", population=initial_abundance, cells=initial_cells)
+
             for step in range(config.n_steps):
                 # Run one step
                 sim.step()
 
                 # Compute metrics
-                total_abundance = float(np.sum(sim.population))
-                occupied_cells = int(np.sum(sim.population > 0))
-                max_density = float(np.max(sim.population))
+                total_abundance = float(np.sum(sim.N))
+                occupied_cells = int(np.sum(sim.N > 0))
+                max_density = float(np.max(sim.N))
 
                 # Compute front distance (simplified)
                 if occupied_cells > 0:
-                    occupied = np.where(sim.population > 0)
+                    occupied = np.where(sim.N > 0)
                     if len(occupied[0]) > 0:
                         center_row = np.mean(occupied[0])
                         max_row = np.max(occupied[0])

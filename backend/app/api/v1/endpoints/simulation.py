@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -50,8 +50,30 @@ async def simulation_stream(config: SimulationConfig) -> AsyncGenerator[str, Non
 
 
 @router.post("/run")
-async def run_simulation(config: SimulationConfig) -> StreamingResponse:
-    """Run simulation and stream progress updates."""
+@router.get("/run")
+async def run_simulation(config: Optional[SimulationConfig] = None) -> StreamingResponse:
+    """Run simulation and stream progress updates (GET for demo, POST for custom)."""
+    if config is None:
+        config = SimulationConfig(
+            region="demo",
+            species_name="Demo Species",
+            bbox=(-125, 25, -66, 49),
+            resolution_deg=0.25,
+            temperature_opt=15,
+            temperature_sigma=8,
+            precipitation_opt=900,
+            precipitation_sigma=300,
+            niche_floor=0.1,
+            carrying_capacity=1000,
+            demography={"r": 0.1, "m": 0.05},
+            dispersal={
+                "kernel_type": "gaussian",
+                "sigma": 10,
+                "fraction": 0.1,
+            },
+            n_steps=50,
+        )
+
     try:
         return StreamingResponse(
             simulation_stream(config),

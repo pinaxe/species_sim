@@ -22,16 +22,25 @@ export default function Home() {
     setSnapshots([]);
     setCurrentStep(0);
 
+    let stepCount = 0;
+
     try {
       await bioSimAPI.runSimulation(config, (progress) => {
-        setSimulationProgress(progress);
-        setSnapshots((prev) => [...prev, progress.current_snapshot]);
-        setCurrentStep(progress.step);
+        // Delay each update with cumulative delay so steps animate sequentially
+        const delay = stepCount * 150; // 150ms per step
+        stepCount++;
+
+        setTimeout(() => {
+          setSimulationProgress(progress);
+          setSnapshots((prev) => [...prev, progress.current_snapshot]);
+          setCurrentStep(progress.step);
+        }, delay);
       });
     } catch (error) {
       console.error('Simulation failed:', error);
     } finally {
-      setIsRunning(false);
+      // Wait for all animations to complete before marking as done
+      setTimeout(() => setIsRunning(false), stepCount * 150);
     }
   };
 
@@ -104,8 +113,77 @@ export default function Home() {
 
         {/* Map and Analytics */}
         <div className="flex-1 flex gap-4 p-4 overflow-hidden">
-          <div className="flex-1">
+          <div className="flex-1 flex flex-col gap-4">
             <SimulatorMap snapshots={snapshots} currentStep={currentStep} />
+
+            {snapshots.length > 0 && (
+              <div className="bg-slate-700 rounded-lg p-4 border border-slate-600 space-y-3">
+                <div className="flex justify-between items-center">
+                  <h3 className="font-semibold text-sm text-emerald-300">
+                    {isRunning ? '▶ Running Simulation' : '✓ Simulation Complete'}
+                  </h3>
+                  {isRunning && <span className="text-xs text-slate-400 animate-pulse">Live update...</span>}
+                </div>
+
+                {/* Progress Bar */}
+                {isRunning && (
+                  <div className="w-full bg-slate-600 rounded overflow-hidden h-2">
+                    <div
+                      className="bg-emerald-500 h-full transition-all"
+                      style={{ width: `${(currentStep / (simulationProgress?.total_steps || 50)) * 100}%` }}
+                    />
+                  </div>
+                )}
+
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between items-center py-2 border-b border-slate-600">
+                    <span className="text-slate-400">Progress:</span>
+                    <span className="font-mono font-bold text-emerald-300 text-base">
+                      Step {currentStep + 1} / {simulationProgress?.total_steps || 50}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-2 bg-slate-600 bg-opacity-50 px-2 rounded">
+                    <span className="text-slate-300">📊 Population:</span>
+                    <span className="font-mono font-bold text-emerald-400 text-xl min-w-fit">
+                      {(simulationProgress?.current_snapshot?.total_abundance || snapshots[currentStep]?.total_abundance || 0).toFixed(0)}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-2 bg-slate-600 bg-opacity-50 px-2 rounded">
+                    <span className="text-slate-300">🗺️ Area:</span>
+                    <span className="font-mono font-bold text-emerald-400 text-xl min-w-fit">
+                      {(simulationProgress?.current_snapshot?.occupied_cells || snapshots[currentStep]?.occupied_cells || 0)} cells
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-2 bg-slate-600 bg-opacity-50 px-2 rounded">
+                    <span className="text-slate-300">📍 Range:</span>
+                    <span className="font-mono font-bold text-emerald-400 text-xl min-w-fit">
+                      {(simulationProgress?.current_snapshot?.front_distance_km || snapshots[currentStep]?.front_distance_km || 0).toFixed(1)} km
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-2 bg-slate-600 bg-opacity-50 px-2 rounded">
+                    <span className="text-slate-300">👥 Max Density:</span>
+                    <span className="font-mono font-bold text-emerald-400 text-base min-w-fit">
+                      {(simulationProgress?.current_snapshot?.max_density || snapshots[currentStep]?.max_density || 0).toFixed(0)}
+                    </span>
+                  </div>
+                </div>
+
+                {!isRunning && (
+                  <div className="border-t border-slate-600 pt-3 mt-3">
+                    <p className="text-xs text-slate-400 mb-2">📈 Growth Summary:</p>
+                    <ul className="text-xs text-slate-300 space-y-1">
+                      <li>✓ Population: {snapshots[0]?.total_abundance.toFixed(0)} → {snapshots[snapshots.length - 1]?.total_abundance.toFixed(0)} (+{((snapshots[snapshots.length - 1]?.total_abundance || 0 - snapshots[0]?.total_abundance || 1) / (snapshots[0]?.total_abundance || 1) * 100).toFixed(0)}%)</li>
+                      <li>✓ Area: {snapshots[snapshots.length - 1]?.occupied_cells} cells invaded</li>
+                      <li>✓ Range: {snapshots[snapshots.length - 1]?.front_distance_km.toFixed(1)} km spread</li>
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {snapshots.length > 0 && (
