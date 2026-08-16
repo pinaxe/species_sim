@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from ...models.gbif import NicheParams, OccurrenceSearchRequest, OccurrenceSearchResponse, Taxon
-from ...services.gbif_service import GBIFService
+from app.models.gbif import NicheParams, OccurrenceSearchRequest, OccurrenceSearchResponse, Taxon
+from app.services.gbif_service import GBIFService
 
 router = APIRouter(prefix="/gbif", tags=["GBIF"])
 gbif_service = GBIFService()

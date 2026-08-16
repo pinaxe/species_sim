@@ -35,7 +35,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from model import Environment, GridSpec, NicheParams
+from .model import Environment, GridSpec, NicheParams
 
 __all__ = [
     "REGIONS",

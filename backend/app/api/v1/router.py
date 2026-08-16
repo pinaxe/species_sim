@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from .endpoints import gbif, rasters, simulation
+from app.api.v1.endpoints import gbif, rasters, simulation
 
 router = APIRouter(prefix="/api/v1")
 

@@ -7,9 +7,9 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from ...models.simulation import SimulationConfig, SimulationResult
-from ...services.simulation_service import SimulationService
-from ...core.logging import get_logger
+from app.models.simulation import SimulationConfig, SimulationResult
+from app.services.simulation_service import SimulationService
+from app.core.logging import get_logger
 
 router = APIRouter(prefix="/simulation", tags=["Simulation"])
 sim_service = SimulationService()

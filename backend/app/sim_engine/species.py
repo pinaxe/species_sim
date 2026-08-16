@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from model import DemographyParams, DispersalParams, NicheParams, SpeciesParams
+from .model import DemographyParams, DispersalParams, NicheParams, SpeciesParams
 
 __all__ = ["PRESETS", "preset_names", "get_preset"]
 

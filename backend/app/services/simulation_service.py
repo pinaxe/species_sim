@@ -15,7 +15,7 @@ from ..models.simulation import (
     SimulationResult,
     SimulationSnapshot,
 )
-from ..sim_engine.data import load_environment, procedural_climate
+from ..sim_engine.data import load_environment, synthetic_environment
 from ..sim_engine.model import Simulator, SpeciesParams, Environment, DemographyParams as ModelDemographyParams
 from .climate_service import ClimateService
 

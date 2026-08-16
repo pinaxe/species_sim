@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from ...models.raster import RasterBBoxResponse, RasterClipRequest, RasterClipResponse
-from ...services.climate_service import ClimateService
+from app.models.raster import RasterBBoxResponse, RasterClipRequest, RasterClipResponse
+from app.services.climate_service import ClimateService
 
 router = APIRouter(prefix="/rasters", tags=["Rasters"])
 climate_service = ClimateService()
