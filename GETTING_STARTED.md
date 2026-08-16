@@ -5,20 +5,45 @@
 ### Prerequisites
 
 - **Python 3.11+** (backend)
-- **Node.js 20+** (frontend)
-- **Redis** (broker & cache)
+- **Node.js 20+** (frontend)  
+- **Redis** (broker & cache) — `brew install redis` (macOS) or `choco install redis` (Windows)
 - **Docker + Docker Compose** (optional, for containerized setup)
 
 ### Option 1: Local Development (Recommended)
 
-```bash
+**Windows:**
+```powershell
 # Install dependencies
-make install
+cd backend
+pip install -r requirements.txt
+
+cd ../frontend
+npm install
+
+# Go back to root
+cd ..
 
 # Copy environment configuration
-make env-setup
+copy backend\.env.example backend\.env
 
-# Start all services (Redis, FastAPI, Next.js in separate terminals)
+# Start services manually (3 separate PowerShell windows):
+
+# Terminal 1: Redis
+redis-server
+
+# Terminal 2: FastAPI
+cd backend
+uvicorn app.main:app --reload --port 8000
+
+# Terminal 3: Next.js
+cd frontend
+npm run dev
+```
+
+**macOS/Linux:**
+```bash
+make install
+make env-setup
 make dev
 ```
 

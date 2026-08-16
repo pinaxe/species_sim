@@ -29,9 +29,10 @@ help:
 
 install:
 	@echo "Installing backend dependencies..."
-	cd backend && pip install -e ".[dev]"
+	cd backend && pip install -r requirements.txt --no-cache-dir
 	@echo "Installing frontend dependencies..."
 	cd frontend && npm install
+	@echo "✓ All dependencies installed"
 
 env-setup:
 	cp backend/.env.example backend/.env
