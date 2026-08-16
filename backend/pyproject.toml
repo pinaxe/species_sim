@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "biosim-engine"
+version = "0.1.0"
+description = "Production-grade species dispersal and ecological simulator"
+requires-python = ">=3.11"
+authors = [
+    {name = "Pinak Ghate", email = "pinakghate@gmail.com"}
+]
+
+dependencies = [
+    # Core engine
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    # Web framework
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+    "python-multipart>=0.0.6",
+    # Async & background jobs
+    "redis>=5.0",
+    "celery>=5.3",
+    "aioredis>=2.0",
+    # Data & geospatial
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "pandas>=2.0",
+    "rasterio>=1.3",
+    "geopandas>=0.14",
+    "shapely>=2.0",
+    "xarray>=2024.0",
+    "rioxarray>=0.14",
+    # API clients
+    "pygbif>=0.6",
+    "httpx>=0.25",
+    "aiohttp>=3.9",
+    # MCP (Model Context Protocol)
+    "mcp>=0.1",
+    "pydantic-core>=2.0",
+    # Logging & observability
+    "structlog>=23.1",
+    "python-json-logger>=2.0",
+    # Utilities
+    "python-dotenv>=1.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.1",
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
