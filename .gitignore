@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+data/*.tif
+data/*.tiff
+invasion.png
