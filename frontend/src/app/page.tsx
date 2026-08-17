@@ -16,8 +16,10 @@ export default function Home() {
   const [simulationProgress, setSimulationProgress] = useState<SimulationProgress | null>(null);
   const [snapshots, setSnapshots] = useState<SimulationSnapshot[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
+  const [currentConfig, setCurrentConfig] = useState<SimulationConfig | null>(null);
 
   const handleRunSimulation = async (config: SimulationConfig) => {
+    setCurrentConfig(config);
     setIsRunning(true);
     setSnapshots([]);
     setCurrentStep(0);
@@ -26,6 +28,16 @@ export default function Home() {
 
     try {
       await bioSimAPI.runSimulation(config, (progress) => {
+        // Debug: log received data
+        if (stepCount === 0 || stepCount % 10 === 0) {
+          console.log(`Step ${progress.step}:`, {
+            population: progress.current_snapshot?.total_abundance,
+            cells: progress.current_snapshot?.occupied_cells,
+            range: progress.current_snapshot?.front_distance_km,
+            density: progress.current_snapshot?.max_density,
+          });
+        }
+
         // Delay each update with cumulative delay so steps animate sequentially
         const delay = stepCount * 150; // 150ms per step
         stepCount++;
@@ -114,7 +126,7 @@ export default function Home() {
         {/* Map and Analytics */}
         <div className="flex-1 flex gap-4 p-4 overflow-hidden">
           <div className="flex-1 flex flex-col gap-4">
-            <SimulatorMap snapshots={snapshots} currentStep={currentStep} />
+            <SimulatorMap snapshots={snapshots} currentStep={currentStep} config={currentConfig || undefined} />
 
             {snapshots.length > 0 && (
               <div className="bg-slate-700 rounded-lg p-4 border border-slate-600 space-y-3">

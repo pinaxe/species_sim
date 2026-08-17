@@ -100,28 +100,66 @@ class BioSimAPI {
     config: SimulationConfig,
     onProgress: (progress: SimulationProgress) => void,
   ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const url = `${API_URL}/api/v1/simulation/run`;
-      const eventSource = new EventSource(url);
+    console.log('Starting simulation request to:', `${API_URL}/api/v1/simulation/run`);
 
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.error) {
-            reject(new Error(data.error));
-          } else {
-            onProgress(data);
-          }
-        } catch (err) {
-          console.error('Failed to parse progress:', err);
-        }
-      };
-
-      eventSource.onerror = () => {
-        eventSource.close();
-        reject(new Error('Simulation stream closed unexpectedly'));
-      };
+    const response = await fetch(`${API_URL}/api/v1/simulation/run`, {
+      method: 'GET', // Use GET for EventSource-style streaming
     });
+
+    console.log('Response status:', response.status, response.statusText);
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('Error response:', text);
+      throw new Error(`Simulation request failed: ${response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('No response body');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let eventCount = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log(`Stream ended. Total events: ${eventCount}`);
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines[lines.length - 1]; // Keep incomplete line
+
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i].trim();
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonStr = line.slice(6); // Remove 'data: ' prefix
+              const data = JSON.parse(jsonStr);
+              eventCount++;
+
+              if (eventCount <= 3 || eventCount % 10 === 0) {
+                console.log(`Event ${eventCount}:`, data);
+              }
+
+              if (data.error) {
+                throw new Error(data.error);
+              }
+              onProgress(data);
+            } catch (err) {
+              console.error('Failed to parse SSE data:', err, 'line:', line);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   async listPresets(): Promise<Record<string, Preset>> {

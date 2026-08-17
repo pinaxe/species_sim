@@ -99,7 +99,17 @@ class SimulationService:
         # Create simulator
         sim = Simulator(env, species_params)
 
-        # Seed initial population at center
+        # Log suitability statistics for debugging
+        suitable_cells = np.sum(sim.suitability > 0)
+        logger.info(
+            "Suitability check",
+            suitable_cells=int(suitable_cells),
+            total_cells=n_rows * n_cols,
+            max_suitability=float(np.max(sim.suitability)),
+            mean_suitability=float(np.mean(sim.suitability)),
+        )
+
+        # Seed initial population - try center first
         center_lon = (config.bbox[0] + config.bbox[2]) / 2
         center_lat = (config.bbox[1] + config.bbox[3]) / 2
         n0 = config.carrying_capacity * 0.1
@@ -107,19 +117,23 @@ class SimulationService:
         success = sim.seed(center_lon, center_lat, n0=n0)
 
         if not success:
-            logger.warning("Seed failed at specified location, trying region center")
-            # Try with row/col directly
-            success = sim.seed_at(n_rows // 2, n_cols // 2, n0=n0)
+            logger.warning("Seed failed at center, searching for suitable location")
+            # Find a cell with maximum suitability
+            if np.max(sim.suitability) > 0:
+                max_suit_idx = np.unravel_index(np.argmax(sim.suitability), sim.suitability.shape)
+                success = sim.seed_at(max_suit_idx[0], max_suit_idx[1], n0=n0)
+                logger.info("Seeded at max suitability location", suitability=float(sim.suitability[max_suit_idx]))
+            else:
+                logger.error("No suitable cells found - niche too restrictive")
 
         if success:
             logger.info(
-                "Population seeded",
+                "Population seeded successfully",
                 species=config.species_name,
                 initial_pop=float(np.sum(sim.N)),
-                seed_loc=(center_lon, center_lat)
             )
         else:
-            logger.error("Failed to seed population at any location")
+            logger.error("Failed to seed population after all attempts")
 
         return sim, env, env_data["lats"]
 
@@ -138,7 +152,12 @@ class SimulationService:
             # Record initial state (step 0) BEFORE any simulation
             initial_abundance = float(np.sum(sim.N))
             initial_cells = int(np.sum(sim.N > 0))
-            logger.info("Initial state", population=initial_abundance, cells=initial_cells)
+            logger.info(
+                "Simulation starting",
+                initial_population=initial_abundance,
+                initial_cells=initial_cells,
+                n_steps=config.n_steps,
+            )
 
             for step in range(config.n_steps):
                 # Run one step
@@ -148,6 +167,14 @@ class SimulationService:
                 total_abundance = float(np.sum(sim.N))
                 occupied_cells = int(np.sum(sim.N > 0))
                 max_density = float(np.max(sim.N))
+
+                if step == 0:
+                    logger.info(
+                        f"Step {step} completed",
+                        population=total_abundance,
+                        cells=occupied_cells,
+                        density=max_density,
+                    )
 
                 # Compute front distance (simplified)
                 if occupied_cells > 0:
@@ -178,6 +205,14 @@ class SimulationService:
                     percent=100.0 * step / config.n_steps,
                     current_snapshot=snapshot,
                 )
+
+                # Debug: log first and every 10th step
+                if step == 0 or step % 10 == 0:
+                    logger.info(
+                        f"Yielding step {step}",
+                        population=total_abundance,
+                        cells=occupied_cells,
+                    )
 
                 yield progress
 

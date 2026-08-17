@@ -40,7 +40,7 @@ async def simulation_stream(config: SimulationConfig) -> AsyncGenerator[str, Non
                 "step": progress.step,
                 "total_steps": progress.total_steps,
                 "percent": progress.percent,
-                "snapshot": progress.current_snapshot.model_dump(),
+                "current_snapshot": progress.current_snapshot.model_dump(),
             }
             yield f"data: {json.dumps(data)}\n\n"
             await asyncio.sleep(0)
@@ -60,10 +60,10 @@ async def run_simulation(config: Optional[SimulationConfig] = None) -> Streaming
             bbox=(-125, 25, -66, 49),
             resolution_deg=0.25,
             temperature_opt=15,
-            temperature_sigma=8,
-            precipitation_opt=900,
-            precipitation_sigma=300,
-            niche_floor=0.1,
+            temperature_sigma=15,  # Wider tolerance
+            precipitation_opt=1000,
+            precipitation_sigma=500,  # Wider tolerance
+            niche_floor=0.01,  # Lower floor so more cells are suitable
             carrying_capacity=1000,
             demography={"r": 0.1, "m": 0.05},
             dispersal={

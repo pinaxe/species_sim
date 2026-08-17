@@ -30,7 +30,17 @@ class GBIFService:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data.get("results", [])
+            results = data.get("results", [])
+            # Transform GBIF response to match Taxon model
+            transformed = []
+            for r in results:
+                transformed.append({
+                    "key": r.get("key"),
+                    "name": r.get("scientificName", r.get("canonicalName", "Unknown")),
+                    "canonicalName": r.get("canonicalName"),
+                    "rank": r.get("rank"),
+                })
+            return transformed
 
     async def search_occurrences(
         self,
