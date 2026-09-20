@@ -181,6 +181,63 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
     });
   }, [config, mapReady]);
 
+  // Render population as dots, updating each step
+  useEffect(() => {
+    if (!mapReady || !map.current) return;
+
+    const snapshot = snapshots[currentStep];
+    const points = snapshot?.population_points || [];
+
+    const geojson: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: points.map(([lon, lat, pop]) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [lon, lat] },
+        properties: { population: pop },
+      })),
+    };
+
+    const existingSource = map.current.getSource('population') as maplibregl.GeoJSONSource | undefined;
+    if (existingSource) {
+      existingSource.setData(geojson);
+      return;
+    }
+
+    map.current.addSource('population', {
+      type: 'geojson',
+      data: geojson,
+    });
+
+    map.current.addLayer({
+      id: 'population-dots',
+      type: 'circle',
+      source: 'population',
+      paint: {
+        'circle-radius': [
+          'interpolate',
+          ['linear'],
+          ['get', 'population'],
+          0, 3,
+          10, 5,
+          100, 9,
+          1000, 14,
+        ],
+        'circle-color': [
+          'interpolate',
+          ['linear'],
+          ['get', 'population'],
+          0, '#fde68a',
+          10, '#f59e0b',
+          100, '#dc2626',
+          1000, '#7f1d1d',
+        ],
+        'circle-opacity': 0.75,
+        'circle-stroke-width': 1,
+        'circle-stroke-color': '#451a03',
+      },
+    });
+  }, [snapshots, currentStep, mapReady]);
+
   return (
     <div className="w-full h-full rounded-lg border border-slate-600 relative overflow-hidden bg-slate-900">
       <div ref={mapContainer} className="w-full h-full" />
@@ -223,6 +280,20 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
             ) : (
               <div className="text-slate-300 animate-pulse">Initializing map...</div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Population legend */}
+      {mapReady && snapshots.length > 0 && (
+        <div className="absolute top-4 right-4 bg-slate-900 bg-opacity-80 text-slate-200 px-3 py-2 rounded text-xs z-10 border border-slate-600">
+          <p className="font-semibold mb-1">Population density</p>
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full bg-[#fde68a]" />
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#f59e0b]" />
+            <span className="inline-block w-3 h-3 rounded-full bg-[#dc2626]" />
+            <span className="inline-block w-3.5 h-3.5 rounded-full bg-[#7f1d1d]" />
+            <span className="ml-1">low → high</span>
           </div>
         </div>
       )}

@@ -50,6 +50,7 @@ export interface SimulationSnapshot {
   max_density: number;
   front_distance_km: number;
   grid_data?: number[][];
+  population_points?: [number, number, number][];
 }
 
 export interface SimulationProgress {

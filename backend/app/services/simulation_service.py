@@ -177,17 +177,32 @@ class SimulationService:
                     )
 
                 # Compute front distance (simplified)
-                if occupied_cells > 0:
-                    occupied = np.where(sim.N > 0)
-                    if len(occupied[0]) > 0:
-                        center_row = np.mean(occupied[0])
-                        max_row = np.max(occupied[0])
-                        front_dist_cells = max_row - center_row
-                        front_distance_km = front_dist_cells * 111 * config.resolution_deg
-                    else:
-                        front_distance_km = 0.0
+                occupied = np.where(sim.N > 0)
+                if occupied_cells > 0 and len(occupied[0]) > 0:
+                    center_row = np.mean(occupied[0])
+                    max_row = np.max(occupied[0])
+                    front_dist_cells = max_row - center_row
+                    front_distance_km = front_dist_cells * 111 * config.resolution_deg
                 else:
                     front_distance_km = 0.0
+
+                # Sample occupied cells as sparse (lon, lat, population) points for map display
+                population_points: list[list[float]] = []
+                n_occupied = len(occupied[0])
+                if n_occupied > 0:
+                    rows, cols = occupied
+                    max_points = 800
+                    if n_occupied > max_points:
+                        idx = np.random.choice(n_occupied, max_points, replace=False)
+                        rows = rows[idx]
+                        cols = cols[idx]
+                    lons_arr = env.grid.lons
+                    lats_arr = env.grid.lats
+                    pops = sim.N[rows, cols]
+                    population_points = [
+                        [float(lons_arr[c]), float(lats_arr[r]), float(p)]
+                        for r, c, p in zip(rows, cols, pops)
+                    ]
 
                 snapshot = SimulationSnapshot(
                     step=step,
@@ -196,6 +211,7 @@ class SimulationService:
                     occupied_cells=occupied_cells,
                     max_density=max_density,
                     front_distance_km=front_distance_km,
+                    population_points=population_points,
                 )
                 snapshots.append(snapshot)
 

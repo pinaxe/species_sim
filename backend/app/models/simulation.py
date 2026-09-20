@@ -68,6 +68,7 @@ class SimulationSnapshot(BaseModel):
     max_density: float
     front_distance_km: float
     grid_data: Optional[list[list[float]]] = None  # Sparse encoding recommended
+    population_points: Optional[list[list[float]]] = None  # [lon, lat, population] triples
 
 
 class SimulationProgress(BaseModel):
