@@ -40,7 +40,25 @@ cd frontend
 npm run dev
 ```
 
-**macOS/Linux:**
+**macOS:**
+```bash
+# Install prerequisites (skip anything you already have)
+brew install python@3.11 node@20 redis gdal
+
+# Install dependencies (uses pip3 — macOS doesn't ship a bare `pip`)
+make install
+make env-setup
+
+# Start Redis as a background service
+brew services start redis
+
+make dev
+```
+
+See [QUICK_START_MACOS.md](QUICK_START_MACOS.md) for a step-by-step walkthrough
+and troubleshooting.
+
+**Linux:**
 ```bash
 make install
 make env-setup

@@ -3,15 +3,29 @@
 import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { SimulationSnapshot, SimulationConfig } from '@/lib/types';
+import { MultiSpeciesConfig, MultiSpeciesSnapshot, SimulationSnapshot, SimulationConfig } from '@/lib/types';
+import { speciesColor } from '@/lib/speciesColors';
 
 interface SimulatorMapProps {
   snapshots: SimulationSnapshot[];
+  multiSnapshots?: MultiSpeciesSnapshot[];
+  speciesNames?: string[];
   currentStep: number;
   config?: SimulationConfig;
+  multiConfig?: MultiSpeciesConfig;
 }
 
-export default function SimulatorMap({ snapshots, currentStep, config }: SimulatorMapProps) {
+export default function SimulatorMap({
+  snapshots,
+  multiSnapshots,
+  speciesNames,
+  currentStep,
+  config,
+  multiConfig,
+}: SimulatorMapProps) {
+  const isMulti = !!multiSnapshots && !!speciesNames;
+  const bbox = multiConfig?.bbox ?? config?.bbox;
+  const regionLabel = multiConfig?.region ?? config?.region;
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -89,9 +103,9 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
 
   // Update region boundaries when map is ready and config changes
   useEffect(() => {
-    if (!mapReady || !map.current || !config) return;
+    if (!mapReady || !map.current || !bbox) return;
 
-    const [west, south, east, north] = config.bbox;
+    const [west, south, east, north] = bbox;
 
     // Fit map to region bounds
     map.current.fitBounds(
@@ -132,8 +146,8 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
             ],
           },
           properties: {
-            name: config.region,
-            species: config.species_name,
+            name: regionLabel,
+            species: config?.species_name ?? speciesNames?.join(', '),
           },
         },
       ],
@@ -179,11 +193,66 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
         map.current.getCanvas().style.cursor = '';
       }
     });
-  }, [config, mapReady]);
+  }, [bbox, regionLabel, mapReady]);
 
-  // Render population as dots, updating each step
+  // Render population as dots, updating each step. In multi-species mode each
+  // species gets its own source/layer, colored by its fixed identity color
+  // (see lib/speciesColors) instead of the single-species density ramp.
   useEffect(() => {
     if (!mapReady || !map.current) return;
+    const m = map.current;
+
+    const desiredIds = isMulti ? speciesNames!.map((name) => `population-${name}`) : ['population'];
+
+    // Tear down any population layer/source left over from a previous run
+    // (a mode switch, or a different species list).
+    (m.getStyle()?.layers ?? []).forEach((layer) => {
+      if (layer.id.startsWith('population') && !desiredIds.includes(layer.id) && m.getLayer(layer.id)) {
+        m.removeLayer(layer.id);
+      }
+    });
+    Object.keys(m.getStyle()?.sources ?? {}).forEach((sourceId) => {
+      if (sourceId.startsWith('population') && !desiredIds.includes(sourceId) && m.getSource(sourceId)) {
+        m.removeSource(sourceId);
+      }
+    });
+
+    if (isMulti) {
+      const snapshot = multiSnapshots![currentStep];
+      speciesNames!.forEach((name, i) => {
+        const id = `population-${name}`;
+        const points = snapshot?.species[name]?.population_points || [];
+        const geojson: GeoJSON.FeatureCollection = {
+          type: 'FeatureCollection',
+          features: points.map(([lon, lat, pop]) => ({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [lon, lat] },
+            properties: { population: pop },
+          })),
+        };
+
+        const existingSource = m.getSource(id) as maplibregl.GeoJSONSource | undefined;
+        if (existingSource) {
+          existingSource.setData(geojson);
+          return;
+        }
+
+        m.addSource(id, { type: 'geojson', data: geojson });
+        m.addLayer({
+          id,
+          type: 'circle',
+          source: id,
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['get', 'population'], 0, 3, 10, 5, 100, 9, 1000, 14],
+            'circle-color': speciesColor(i),
+            'circle-opacity': 0.8,
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#0d0d0d',
+          },
+        });
+      });
+      return;
+    }
 
     const snapshot = snapshots[currentStep];
     const points = snapshot?.population_points || [];
@@ -197,19 +266,19 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
       })),
     };
 
-    const existingSource = map.current.getSource('population') as maplibregl.GeoJSONSource | undefined;
+    const existingSource = m.getSource('population') as maplibregl.GeoJSONSource | undefined;
     if (existingSource) {
       existingSource.setData(geojson);
       return;
     }
 
-    map.current.addSource('population', {
+    m.addSource('population', {
       type: 'geojson',
       data: geojson,
     });
 
-    map.current.addLayer({
-      id: 'population-dots',
+    m.addLayer({
+      id: 'population',
       type: 'circle',
       source: 'population',
       paint: {
@@ -236,22 +305,44 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
         'circle-stroke-color': '#451a03',
       },
     });
-  }, [snapshots, currentStep, mapReady]);
+  }, [snapshots, multiSnapshots, speciesNames, currentStep, mapReady, isMulti]);
 
   return (
     <div className="w-full h-full rounded-lg border border-slate-600 relative overflow-hidden bg-slate-900">
       <div ref={mapContainer} className="w-full h-full" />
 
       {/* Info overlay */}
-      {config && mapReady && (
+      {regionLabel && mapReady && (
         <div className="absolute top-4 left-4 bg-slate-900 bg-opacity-80 text-emerald-300 px-3 py-2 rounded text-xs z-10 border border-emerald-600">
-          <p className="font-semibold">{config.region.replace('_', ' ').toUpperCase()}</p>
-          <p className="text-emerald-200 text-xs">🌱 {config.species_name}</p>
+          <p className="font-semibold">{regionLabel.replace('_', ' ').toUpperCase()}</p>
+          {isMulti ? (
+            <div className="space-y-0.5 mt-1">
+              {speciesNames!.map((name, i) => (
+                <p key={name} className="flex items-center gap-1.5 text-emerald-200 text-xs">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: speciesColor(i) }} />
+                  {name}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-emerald-200 text-xs">🌱 {config?.species_name}</p>
+          )}
         </div>
       )}
 
       {/* Step info overlay */}
-      {snapshots.length > 0 && mapReady && (
+      {isMulti && multiSnapshots!.length > 0 && mapReady && (
+        <div className="absolute bottom-4 left-4 bg-slate-900 bg-opacity-80 text-emerald-300 px-3 py-2 rounded text-xs z-10 border border-emerald-600">
+          <p className="font-semibold">Step {currentStep + 1} / {multiSnapshots!.length}</p>
+          {speciesNames!.map((name, i) => (
+            <p key={name} className="flex items-center gap-1.5 text-emerald-200">
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: speciesColor(i) }} />
+              {name}: {multiSnapshots![currentStep]?.species[name]?.total_abundance.toFixed(0) ?? 0}
+            </p>
+          ))}
+        </div>
+      )}
+      {!isMulti && snapshots.length > 0 && mapReady && (
         <div className="absolute bottom-4 left-4 bg-slate-900 bg-opacity-80 text-emerald-300 px-3 py-2 rounded text-xs z-10 border border-emerald-600">
           <p className="font-semibold">Step {currentStep + 1} / {snapshots.length}</p>
           <p className="text-emerald-200">Population: {snapshots[currentStep]?.total_abundance.toFixed(0)}</p>
@@ -260,7 +351,7 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
       )}
 
       {/* No data message */}
-      {!config && !mapReady && (
+      {!regionLabel && !mapReady && (
         <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-40 z-5">
           <div className="text-center text-slate-300">
             <p className="text-sm">Select a species and region to start</p>
@@ -285,7 +376,20 @@ export default function SimulatorMap({ snapshots, currentStep, config }: Simulat
       )}
 
       {/* Population legend */}
-      {mapReady && snapshots.length > 0 && (
+      {mapReady && isMulti && multiSnapshots!.length > 0 && (
+        <div className="absolute top-4 right-4 bg-slate-900 bg-opacity-80 text-slate-200 px-3 py-2 rounded text-xs z-10 border border-slate-600">
+          <p className="font-semibold mb-1">Species (dot size = local density)</p>
+          <div className="space-y-1">
+            {speciesNames!.map((name, i) => (
+              <div key={name} className="flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: speciesColor(i) }} />
+                <span>{name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {mapReady && !isMulti && snapshots.length > 0 && (
         <div className="absolute top-4 right-4 bg-slate-900 bg-opacity-80 text-slate-200 px-3 py-2 rounded text-xs z-10 border border-slate-600">
           <p className="font-semibold mb-1">Population density</p>
           <div className="flex items-center gap-1">

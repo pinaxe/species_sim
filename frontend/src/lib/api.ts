@@ -1,5 +1,8 @@
 import axios, { AxiosInstance } from 'axios';
 import {
+  InteractionPreset,
+  MultiSpeciesConfig,
+  MultiSpeciesProgress,
   NicheParams,
   Occurrence,
   OccurrenceSearchResponse,
@@ -147,6 +150,71 @@ class BioSimAPI {
                 console.log(`Event ${eventCount}:`, data);
               }
 
+              if (data.error) {
+                throw new Error(data.error);
+              }
+              onProgress(data);
+            } catch (err) {
+              console.error('Failed to parse SSE data:', err, 'line:', line);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  // Multi-species (interacting populations) endpoints
+  async listInteractionPresets(): Promise<Record<string, InteractionPreset>> {
+    const response = await this.client.get('/simulation/interaction-presets');
+    return response.data.presets || {};
+  }
+
+  async getInteractionPreset(presetId: string): Promise<InteractionPreset> {
+    const response = await this.client.get(
+      `/simulation/interaction-presets/${encodeURIComponent(presetId)}`,
+    );
+    return response.data;
+  }
+
+  async runMultiSpeciesSimulation(
+    config: MultiSpeciesConfig,
+    onProgress: (progress: MultiSpeciesProgress) => void,
+  ): Promise<void> {
+    const response = await fetch(`${API_URL}/api/v1/simulation/run-multi`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Multi-species simulation request failed: ${response.statusText} ${text}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('No response body');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines[lines.length - 1]; // keep incomplete line
+
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i].trim();
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
               if (data.error) {
                 throw new Error(data.error);
               }

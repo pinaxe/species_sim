@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronRight, Zap, Search, Globe } from 'lucide-react';
-import { SimulationConfig, Taxon } from '@/lib/types';
+import { ChevronRight, Zap, Search, Globe, Users } from 'lucide-react';
+import { MultiSpeciesConfig, SimulationConfig, Taxon } from '@/lib/types';
 import { bioSimAPI } from '@/lib/api';
+import MultiSpeciesBuilder from './MultiSpeciesBuilder';
 
 interface Region {
   id: string;
@@ -15,6 +16,7 @@ interface Region {
 
 interface WizardSidebarProps {
   onRunSimulation: (config: SimulationConfig) => void;
+  onRunMultiSpeciesSimulation: (config: MultiSpeciesConfig) => void;
   proMode: boolean;
   onProModeChange: (enabled: boolean) => void;
   isRunning: boolean;
@@ -67,10 +69,12 @@ const REGIONS: Region[] = [
 
 export default function WizardSidebar({
   onRunSimulation,
+  onRunMultiSpeciesSimulation,
   proMode,
   onProModeChange,
   isRunning,
 }: WizardSidebarProps) {
+  const [mode, setMode] = useState<'single' | 'multi'>('single');
   const [step, setStep] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Taxon[]>([]);
@@ -137,13 +141,45 @@ export default function WizardSidebar({
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-4 py-4 border-b border-slate-700">
-        <h2 className="text-lg font-bold text-emerald-400">Welcome</h2>
-        <p className="text-xs text-slate-400 mt-1">3-Step Quick Start</p>
+      <div className="px-4 py-4 border-b border-slate-700 space-y-3">
+        <div>
+          <h2 className="text-lg font-bold text-emerald-400">Welcome</h2>
+          <p className="text-xs text-slate-400 mt-1">
+            {mode === 'single' ? '3-Step Quick Start' : 'Build a food web and watch it balance'}
+          </p>
+        </div>
+        <div className="flex gap-1 bg-slate-900 rounded p-1">
+          <button
+            onClick={() => setMode('single')}
+            className={`flex-1 text-xs font-medium py-1.5 rounded transition-colors ${
+              mode === 'single' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Single species
+          </button>
+          <button
+            onClick={() => setMode('multi')}
+            className={`flex-1 text-xs font-medium py-1.5 rounded transition-colors flex items-center justify-center gap-1 ${
+              mode === 'multi' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Users className="w-3 h-3" /> Multi-species
+          </button>
+        </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {mode === 'multi' && (
+          <MultiSpeciesBuilder
+            regions={REGIONS}
+            onRunSimulation={onRunMultiSpeciesSimulation}
+            isRunning={isRunning}
+          />
+        )}
+
+        {mode === 'single' && (
+        <>
         {/* Step 1 */}
         <div className={`space-y-2 p-3 rounded transition-colors ${step === 1 ? 'bg-slate-700' : 'hover:bg-slate-800'}`}>
           <button
@@ -281,6 +317,8 @@ export default function WizardSidebar({
           <Zap className="w-4 h-4" />
           Run Simulation
         </button>
+        </>
+        )}
       </div>
 
       {/* Footer */}

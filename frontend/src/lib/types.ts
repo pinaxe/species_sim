@@ -86,6 +86,58 @@ export interface OccurrenceSearchResponse {
   taxon_name: string;
 }
 
+// Multi-species (interacting populations) types
+
+export interface InteractionConfig {
+  affected: string; // species name whose growth this edge modifies
+  other: string; // species name this edge reacts to
+  coefficient: number; // negative = harmed (prey), positive = benefits (predator)
+}
+
+export interface SpeciesConfig {
+  name: string;
+  temperature_opt: number;
+  temperature_sigma: number;
+  precipitation_opt: number;
+  precipitation_sigma: number;
+  niche_floor?: number;
+  carrying_capacity: number;
+  demography: DemographyParams;
+  dispersal: DispersalParams;
+  initial_population: number;
+  seed_x?: number;
+  seed_y?: number;
+  notes?: string;
+}
+
+export interface MultiSpeciesConfig {
+  region: string;
+  bbox: [number, number, number, number];
+  resolution_deg: number;
+  species: SpeciesConfig[];
+  interactions: InteractionConfig[];
+  n_steps: number;
+}
+
+export interface MultiSpeciesSnapshot {
+  step: number;
+  time: number;
+  species: Record<string, SimulationSnapshot>;
+}
+
+export interface MultiSpeciesProgress {
+  step: number;
+  total_steps: number;
+  percent: number;
+  current_snapshot: MultiSpeciesSnapshot;
+}
+
+export interface InteractionPreset {
+  name: string;
+  species: SpeciesConfig[];
+  interactions: InteractionConfig[];
+}
+
 export interface Preset {
   name: string;
   description: string;

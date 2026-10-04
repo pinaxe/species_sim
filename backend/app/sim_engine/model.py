@@ -51,6 +51,8 @@ __all__ = [
     "SpeciesParams",
     "StepMetrics",
     "Simulator",
+    "InteractionEdge",
+    "MultiSpeciesSimulator",
     "gaussian_response",
     "habitat_suitability",
     "logistic_step",
@@ -319,17 +321,23 @@ def logistic_step(
     N: np.ndarray,
     suitability: np.ndarray,
     demo: DemographyParams,
+    interaction_delta: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     r"""One step of suitability-scaled discrete logistic growth.
 
     .. math::
-        N_{t+1} = N_t + r\,N_t\left(1 - \frac{N_t}{K\,S}\right) - m\,N_t
+        N_{t+1} = N_t + r\,N_t\left(1 - \frac{N_t}{K\,S}\right) - m\,N_t + \Delta_{\text{interaction}}
 
     Cells with :math:`S = 0` have zero capacity and are extirpated outright
     (the ratio :math:`N/(KS)` is undefined there, so it is short-circuited
     rather than clipped). Growth is clipped at ``-N`` so a large ``r`` cannot
     drive a cell negative; densities are clipped at ``2 K S`` to keep
     overshoot-driven oscillations bounded rather than divergent.
+
+    ``interaction_delta`` is an optional per-cell growth adjustment (same
+    shape as ``N``) contributed by other species -- see
+    :class:`MultiSpeciesSimulator`. It is folded in before the ``-N`` floor so
+    a predator absent any prey still can't be pushed negative in one step.
     """
     capacity = demo.K * suitability
     habitable = capacity > 0.0
@@ -337,6 +345,8 @@ def logistic_step(
     # Safe division: unsuitable cells get a dummy capacity and are masked out.
     safe_capacity = np.where(habitable, capacity, 1.0)
     growth = demo.r * N * (1.0 - N / safe_capacity)
+    if interaction_delta is not None:
+        growth = growth + interaction_delta
     growth = np.maximum(growth, -N)  # never remove more than is present
 
     N_next = N + growth - demo.mortality * N
@@ -651,9 +661,17 @@ class Simulator:
             self.N[r0, c0] -= emigrants
             self.N[r, c] += emigrants
 
-    def step(self) -> StepMetrics:
-        """Advance the simulation by one time step and return its metrics."""
-        self.N = logistic_step(self.N, self.suitability, self.species.demography)
+    def step(self, interaction_delta: Optional[np.ndarray] = None) -> StepMetrics:
+        """Advance the simulation by one time step and return its metrics.
+
+        ``interaction_delta`` lets a :class:`MultiSpeciesSimulator` inject a
+        per-cell growth adjustment (predation, competition, ...) computed from
+        every species' population *before* any of them steps, so interactions
+        are evaluated simultaneously rather than in an arbitrary order.
+        """
+        self.N = logistic_step(
+            self.N, self.suitability, self.species.demography, interaction_delta
+        )
         self.N = disperse(
             self.N,
             self._kernel,
@@ -727,3 +745,141 @@ class Simulator:
             f"t={m.step}  N={m.total_population:,.0f}  "
             f"cells={m.occupied_cells}  front={m.front_km:,.0f} km"
         )
+
+
+# --------------------------------------------------------------------------- #
+# Multi-species interactions
+# --------------------------------------------------------------------------- #
+@dataclass
+class InteractionEdge:
+    r"""One directed pairwise term in a generalised Lotka-Volterra system.
+
+    Each step, species ``affected`` gets an extra per-cell growth contribution
+
+    .. math::
+        \Delta_{\text{affected}} \mathrel{+}= \text{coefficient} \cdot
+            N_{\text{affected}} \cdot \frac{N_{\text{other}}}{K_{\text{other}}}
+
+    Normalising by the *other* species' carrying capacity keeps ``coefficient``
+    on an interpretable scale regardless of each species' absolute population
+    size: a coefficient of ``-0.5`` means "when ``other`` is at its own full
+    carrying capacity, ``affected``'s per-capita growth rate drops by 0.5".
+
+    A predator-prey pair is two edges sharing the same magnitude but opposite
+    sign and a conversion efficiency: the prey's edge is negative (eaten), the
+    predator's edge is positive and scaled down (only a fraction of what's
+    eaten becomes new predators). Pure competition uses two negative edges;
+    mutualism uses two positive edges.
+    """
+
+    affected: str
+    other: str
+    coefficient: float
+
+
+class MultiSpeciesSimulator:
+    """Runs several :class:`Simulator` instances on a shared grid, coupled by
+    :class:`InteractionEdge` terms evaluated once per step from a consistent
+    snapshot of every species' population.
+
+    Each species keeps its own niche, demography and dispersal -- only the
+    local growth step is coupled, so a fox and a rabbit can still have wildly
+    different thermal tolerances and dispersal ranges while still checking
+    each other's numbers.
+
+    Example
+    -------
+    >>> rabbit = Simulator(env, rabbit_params, seed=1)
+    >>> fox = Simulator(env, fox_params, seed=2)
+    >>> multi = MultiSpeciesSimulator({"rabbit": rabbit, "fox": fox}, [
+    ...     InteractionEdge("rabbit", "fox", coefficient=-0.6),
+    ...     InteractionEdge("fox", "rabbit", coefficient=0.2),
+    ... ])
+    >>> multi.seed("rabbit", lon=-122.0, lat=46.0, n0=500.0)
+    >>> multi.seed("fox", lon=-122.0, lat=46.0, n0=20.0)
+    >>> multi.run(50)
+    """
+
+    def __init__(
+        self,
+        simulators: Dict[str, Simulator],
+        interactions: Optional[Sequence[InteractionEdge]] = None,
+    ) -> None:
+        if not simulators:
+            raise ValueError("MultiSpeciesSimulator needs at least one species")
+        shapes = {name: sim.env.grid.shape for name, sim in simulators.items()}
+        if len(set(shapes.values())) > 1:
+            raise ValueError(f"all species must share one grid, got shapes {shapes}")
+
+        unknown = {
+            name
+            for edge in (interactions or [])
+            for name in (edge.affected, edge.other)
+            if name not in simulators
+        }
+        if unknown:
+            raise ValueError(f"interaction references unknown species: {sorted(unknown)}")
+
+        self.sims: Dict[str, Simulator] = dict(simulators)
+        self.interactions: List[InteractionEdge] = list(interactions or [])
+        self.t: int = 0
+
+    @property
+    def names(self) -> List[str]:
+        return list(self.sims.keys())
+
+    def seed(self, name: str, lon: float, lat: float, n0: float = 500.0,
+             radius_cells: int = 0, additive: bool = True) -> bool:
+        return self.sims[name].seed(lon, lat, n0=n0, radius_cells=radius_cells, additive=additive)
+
+    def seed_at(self, name: str, row: int, col: int, n0: float = 500.0,
+                radius_cells: int = 0, additive: bool = True) -> bool:
+        return self.sims[name].seed_at(row, col, n0=n0, radius_cells=radius_cells, additive=additive)
+
+    def _interaction_deltas(self) -> Dict[str, np.ndarray]:
+        deltas = {
+            name: np.zeros(sim.env.grid.shape, dtype=np.float32)
+            for name, sim in self.sims.items()
+        }
+        for edge in self.interactions:
+            other_sim = self.sims[edge.other]
+            other_K = max(float(other_sim.species.demography.K), 1e-9)
+            deltas[edge.affected] += (
+                edge.coefficient
+                * self.sims[edge.affected].N
+                * (other_sim.N / other_K)
+            ).astype(np.float32)
+        return deltas
+
+    def step(self) -> Dict[str, StepMetrics]:
+        """Advance every species by one time step, coupled via ``interactions``.
+
+        Interaction deltas are computed from a snapshot of every species' ``N``
+        taken *before* any of them steps, so predator and prey react to the
+        same instant in time rather than to each other's already-updated
+        population.
+        """
+        deltas = self._interaction_deltas()
+        metrics = {
+            name: sim.step(deltas[name])
+            for name, sim in self.sims.items()
+        }
+        self.t += 1
+        return metrics
+
+    def run(self, n_steps: int, callback: Optional[Callable[[int], None]] = None) -> None:
+        for _ in range(int(n_steps)):
+            self.step()
+            if callback is not None:
+                callback(self.t)
+
+    def reset(self, keep_seed: bool = True) -> None:
+        for sim in self.sims.values():
+            sim.reset(keep_seed=keep_seed)
+        self.t = 0
+
+    def frame(self, name: str, index: int = -1) -> np.ndarray:
+        return self.sims[name].frame(index)
+
+    def metrics_table(self) -> Dict[str, List[Dict[str, float]]]:
+        return {name: sim.metrics_table() for name, sim in self.sims.items()}

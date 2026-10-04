@@ -17,11 +17,25 @@ annual intrinsic increase).
 
 from __future__ import annotations
 
-from typing import Dict, List
+import copy
+from typing import Dict, List, Tuple
 
-from .model import DemographyParams, DispersalParams, NicheParams, SpeciesParams
+from .model import (
+    DemographyParams,
+    DispersalParams,
+    InteractionEdge,
+    NicheParams,
+    SpeciesParams,
+)
 
-__all__ = ["PRESETS", "preset_names", "get_preset"]
+__all__ = [
+    "PRESETS",
+    "preset_names",
+    "get_preset",
+    "INTERACTION_PRESETS",
+    "interaction_preset_names",
+    "get_interaction_preset",
+]
 
 
 PRESETS: Dict[str, SpeciesParams] = {
@@ -99,6 +113,81 @@ def preset_names() -> List[str]:
 
 def get_preset(name: str) -> SpeciesParams:
     """Return a *copy* of a preset so UI edits never mutate the table."""
-    import copy
-
     return copy.deepcopy(PRESETS.get(name, PRESETS["Generic generalist"]))
+
+
+# --------------------------------------------------------------------------- #
+# Multi-species interaction presets
+# --------------------------------------------------------------------------- #
+#: Each entry is (species list, interaction edges) ready to hand to
+#: ``MultiSpeciesSimulator`` -- a food web plus the per-species life history
+#: that makes it behave sensibly (predators have lower ``r`` and ``K`` than
+#: their prey, as in any real system).
+INTERACTION_PRESETS: Dict[str, Tuple[List[SpeciesParams], List[InteractionEdge]]] = {
+    "Fox and rabbit": (
+        [
+            SpeciesParams(
+                name="Rabbit",
+                niche=NicheParams(t_opt=14.0, t_tol=12.0, p_opt=900.0, p_tol=800.0),
+                demography=DemographyParams(r=0.55, K=4000.0, mortality=0.05),
+                dispersal=DispersalParams(sigma_km=15.0, kernel="gaussian", fraction=0.3),
+                notes="Fast-breeding prey with a broad niche. Left alone it "
+                      "saturates its carrying capacity; with foxes present its "
+                      "equilibrium population settles well below K.",
+            ),
+            SpeciesParams(
+                name="Fox",
+                niche=NicheParams(t_opt=14.0, t_tol=15.0, p_opt=900.0, p_tol=900.0),
+                demography=DemographyParams(r=0.08, K=300.0, mortality=0.12),
+                dispersal=DispersalParams(sigma_km=35.0, kernel="exponential", fraction=0.4),
+                notes="Slow-breeding predator: its own logistic term keeps it "
+                      "bounded even before predation is considered, but without "
+                      "rabbits to eat its high mortality drives it to extinction.",
+            ),
+        ],
+        [
+            # Rabbits lose growth in proportion to fox density (predation).
+            InteractionEdge(affected="Rabbit", other="Fox", coefficient=-0.9),
+            # Foxes gain growth in proportion to rabbit density, scaled down by
+            # a conversion efficiency (most eaten biomass isn't converted to
+            # new foxes).
+            InteractionEdge(affected="Fox", other="Rabbit", coefficient=0.25),
+        ],
+    ),
+    "Lynx and snowshoe hare": (
+        [
+            SpeciesParams(
+                name="Snowshoe hare",
+                niche=NicheParams(t_opt=2.0, t_tol=10.0, p_opt=600.0, p_tol=400.0),
+                demography=DemographyParams(r=0.7, K=5000.0, mortality=0.06),
+                dispersal=DispersalParams(sigma_km=10.0, kernel="gaussian", fraction=0.25),
+                notes="Classic boreal prey species; the Hudson's Bay Company "
+                      "pelt records are the textbook example of this cycle.",
+            ),
+            SpeciesParams(
+                name="Lynx",
+                niche=NicheParams(t_opt=0.0, t_tol=12.0, p_opt=600.0, p_tol=450.0),
+                demography=DemographyParams(r=0.1, K=200.0, mortality=0.15),
+                dispersal=DispersalParams(sigma_km=40.0, kernel="exponential", fraction=0.35),
+                notes="Specialist predator: strong coupling to hare density "
+                      "produces the ~10-year boom-bust cycle seen in the field data.",
+            ),
+        ],
+        [
+            InteractionEdge(affected="Snowshoe hare", other="Lynx", coefficient=-1.1),
+            InteractionEdge(affected="Lynx", other="Snowshoe hare", coefficient=0.3),
+        ],
+    ),
+}
+
+
+def interaction_preset_names() -> List[str]:
+    return list(INTERACTION_PRESETS.keys())
+
+
+def get_interaction_preset(name: str) -> Tuple[List[SpeciesParams], List[InteractionEdge]]:
+    """Return a deep copy of a named food-web preset (species + interactions)."""
+    species, edges = INTERACTION_PRESETS.get(
+        name, INTERACTION_PRESETS["Fox and rabbit"]
+    )
+    return copy.deepcopy(species), copy.deepcopy(edges)

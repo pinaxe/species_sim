@@ -6,20 +6,36 @@ import SimulatorMap from '@/components/map/SimulatorMap';
 import WizardSidebar from '@/components/panels/WizardSidebar';
 import AnalyticsPanel from '@/components/panels/AnalyticsPanel';
 import TimelineHUD from '@/components/hud/TimelineHUD';
-import { SimulationConfig, SimulationProgress, SimulationSnapshot } from '@/lib/types';
+import {
+  MultiSpeciesConfig,
+  MultiSpeciesProgress,
+  MultiSpeciesSnapshot,
+  SimulationConfig,
+  SimulationProgress,
+  SimulationSnapshot,
+} from '@/lib/types';
 import { bioSimAPI } from '@/lib/api';
+import { speciesColor } from '@/lib/speciesColors';
 
 export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [proMode, setProMode] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [resultMode, setResultMode] = useState<'single' | 'multi'>('single');
   const [simulationProgress, setSimulationProgress] = useState<SimulationProgress | null>(null);
   const [snapshots, setSnapshots] = useState<SimulationSnapshot[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [currentConfig, setCurrentConfig] = useState<SimulationConfig | null>(null);
 
+  const [multiProgress, setMultiProgress] = useState<MultiSpeciesProgress | null>(null);
+  const [multiSnapshots, setMultiSnapshots] = useState<MultiSpeciesSnapshot[]>([]);
+  const [multiConfig, setMultiConfig] = useState<MultiSpeciesConfig | null>(null);
+
   const handleRunSimulation = async (config: SimulationConfig) => {
+    setResultMode('single');
     setCurrentConfig(config);
+    setMultiConfig(null);
+    setMultiSnapshots([]);
     setIsRunning(true);
     setSnapshots([]);
     setCurrentStep(0);
@@ -56,12 +72,51 @@ export default function Home() {
     }
   };
 
+  const handleRunMultiSpeciesSimulation = async (config: MultiSpeciesConfig) => {
+    setResultMode('multi');
+    setMultiConfig(config);
+    setCurrentConfig(null);
+    setSnapshots([]);
+    setIsRunning(true);
+    setMultiSnapshots([]);
+    setCurrentStep(0);
+
+    let stepCount = 0;
+
+    try {
+      await bioSimAPI.runMultiSpeciesSimulation(config, (progress) => {
+        const delay = stepCount * 150; // 150ms per step, matches single-species pacing
+        stepCount++;
+
+        setTimeout(() => {
+          setMultiProgress(progress);
+          setMultiSnapshots((prev) => [...prev, progress.current_snapshot]);
+          setCurrentStep(progress.step);
+        }, delay);
+      });
+    } catch (error) {
+      console.error('Multi-species simulation failed:', error);
+    } finally {
+      setTimeout(() => setIsRunning(false), stepCount * 150);
+    }
+  };
+
   const handleReset = () => {
     setSnapshots([]);
+    setMultiSnapshots([]);
     setCurrentStep(0);
     setSimulationProgress(null);
+    setMultiProgress(null);
     setIsRunning(false);
   };
+
+  const isMulti = resultMode === 'multi';
+  const hasResults = isMulti ? multiSnapshots.length > 0 : snapshots.length > 0;
+  const totalSteps = isMulti
+    ? multiProgress?.total_steps ?? multiConfig?.n_steps ?? 50
+    : simulationProgress?.total_steps ?? 50;
+  const speciesNames = multiConfig?.species.map((s) => s.name) ?? [];
+  const currentMultiSnapshot = multiSnapshots[currentStep];
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-50">
@@ -74,6 +129,7 @@ export default function Home() {
         {sidebarOpen && (
           <WizardSidebar
             onRunSimulation={handleRunSimulation}
+            onRunMultiSpeciesSimulation={handleRunMultiSpeciesSimulation}
             proMode={proMode}
             onProModeChange={setProMode}
             isRunning={isRunning}
@@ -97,7 +153,7 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-2">
-            {snapshots.length > 0 && (
+            {hasResults && (
               <>
                 <button
                   onClick={() => setIsRunning(!isRunning)}
@@ -126,9 +182,16 @@ export default function Home() {
         {/* Map and Analytics */}
         <div className="flex-1 flex gap-4 p-4 overflow-hidden">
           <div className="flex-1 flex flex-col gap-4">
-            <SimulatorMap snapshots={snapshots} currentStep={currentStep} config={currentConfig || undefined} />
+            <SimulatorMap
+              snapshots={snapshots}
+              multiSnapshots={isMulti ? multiSnapshots : undefined}
+              speciesNames={isMulti ? speciesNames : undefined}
+              currentStep={currentStep}
+              config={currentConfig || undefined}
+              multiConfig={isMulti ? multiConfig || undefined : undefined}
+            />
 
-            {snapshots.length > 0 && (
+            {hasResults && !isMulti && (
               <div className="bg-slate-700 rounded-lg p-4 border border-slate-600 space-y-3">
                 <div className="flex justify-between items-center">
                   <h3 className="font-semibold text-sm text-emerald-300">
@@ -196,23 +259,108 @@ export default function Home() {
                 )}
               </div>
             )}
+
+            {hasResults && isMulti && currentMultiSnapshot && (
+              <div className="bg-slate-700 rounded-lg p-4 border border-slate-600 space-y-3">
+                <div className="flex justify-between items-center">
+                  <h3 className="font-semibold text-sm text-emerald-300">
+                    {isRunning ? '▶ Running Simulation' : '✓ Simulation Complete'}
+                  </h3>
+                  {isRunning && <span className="text-xs text-slate-400 animate-pulse">Live update...</span>}
+                </div>
+
+                {isRunning && (
+                  <div className="w-full bg-slate-600 rounded overflow-hidden h-2">
+                    <div
+                      className="bg-emerald-500 h-full transition-all"
+                      style={{ width: `${(currentStep / totalSteps) * 100}%` }}
+                    />
+                  </div>
+                )}
+
+                <div className="flex justify-between items-center py-2 border-b border-slate-600 text-sm">
+                  <span className="text-slate-400">Progress:</span>
+                  <span className="font-mono font-bold text-emerald-300 text-base">
+                    Step {currentStep + 1} / {totalSteps}
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {speciesNames.map((name, i) => {
+                    const snap = currentMultiSnapshot.species[name];
+                    if (!snap) return null;
+                    return (
+                      <div
+                        key={name}
+                        className="flex items-center justify-between py-2 bg-slate-600 bg-opacity-50 px-3 rounded"
+                      >
+                        <span className="flex items-center gap-2 text-slate-300 text-sm">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: speciesColor(i) }}
+                          />
+                          {name}
+                        </span>
+                        <span className="font-mono font-bold text-xl" style={{ color: speciesColor(i) }}>
+                          {snap.total_abundance.toFixed(0)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {!isRunning && (
+                  <div className="border-t border-slate-600 pt-3 mt-3">
+                    <p className="text-xs text-slate-400 mb-2">📈 Growth Summary:</p>
+                    <ul className="text-xs text-slate-300 space-y-1">
+                      {speciesNames.map((name) => {
+                        const first = multiSnapshots[0]?.species[name];
+                        const last = multiSnapshots[multiSnapshots.length - 1]?.species[name];
+                        if (!first || !last) return null;
+                        const pct = first.total_abundance
+                          ? ((last.total_abundance - first.total_abundance) / first.total_abundance) * 100
+                          : 0;
+                        return (
+                          <li key={name}>
+                            ✓ {name}: {first.total_abundance.toFixed(0)} → {last.total_abundance.toFixed(0)} ({pct >= 0 ? '+' : ''}{pct.toFixed(0)}%)
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {snapshots.length > 0 && (
+          {hasResults && (
             <div className="w-80 overflow-y-auto">
-              <AnalyticsPanel snapshots={snapshots} currentStep={currentStep} />
+              <AnalyticsPanel
+                snapshots={snapshots}
+                multiSnapshots={isMulti ? multiSnapshots : undefined}
+                speciesNames={isMulti ? speciesNames : undefined}
+                currentStep={currentStep}
+              />
             </div>
           )}
         </div>
 
         {/* Timeline HUD */}
-        {snapshots.length > 0 && (
+        {hasResults && (
           <div className="bg-slate-800 border-t border-slate-700 p-4">
             <TimelineHUD
-              snapshots={snapshots}
+              totalSteps={isMulti ? multiSnapshots.length : snapshots.length}
               currentStep={currentStep}
               onStepChange={setCurrentStep}
               isRunning={isRunning}
+              year={isMulti ? currentMultiSnapshot?.time ?? 0 : snapshots[currentStep]?.time ?? 0}
+              abundanceLabel={
+                isMulti
+                  ? speciesNames
+                      .map((n) => `${n}: ${currentMultiSnapshot?.species[n]?.total_abundance.toFixed(0) ?? 0}`)
+                      .join('  ·  ')
+                  : (snapshots[currentStep]?.total_abundance ?? 0).toFixed(0)
+              }
             />
           </div>
         )}

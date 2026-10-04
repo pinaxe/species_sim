@@ -29,7 +29,7 @@ help:
 
 install:
 	@echo "Installing backend dependencies..."
-	cd backend && pip install -r requirements.txt --no-cache-dir
+	cd backend && pip3 install -r requirements.txt --no-cache-dir
 	@echo "Installing frontend dependencies..."
 	cd frontend && npm install
 	@echo "✓ All dependencies installed"

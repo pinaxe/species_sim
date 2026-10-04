@@ -10,6 +10,9 @@ from ..core.logging import get_logger
 from ..models.simulation import (
     DemographyParams,
     DispersalParams,
+    MultiSpeciesConfig,
+    MultiSpeciesProgress,
+    MultiSpeciesSnapshot,
     SimulationConfig,
     SimulationProgress,
     SimulationResult,
@@ -17,6 +20,8 @@ from ..models.simulation import (
 )
 from ..sim_engine.data import load_environment, synthetic_environment
 from ..sim_engine.model import (
+    InteractionEdge,
+    MultiSpeciesSimulator,
     Simulator,
     SpeciesParams,
     Environment,
@@ -244,6 +249,155 @@ class SimulationService:
 
         except Exception as e:
             logger.error(f"Simulation failed: {e}")
+            raise
+
+    @staticmethod
+    def _population_points(
+        sim: Simulator, env: Environment, max_points: int = 500
+    ) -> tuple[list[list[float]], int, float]:
+        """Sparse-sample a species' occupied cells as (lon, lat, pop) triples."""
+        occupied = np.where(sim.N > 0)
+        n_occupied = len(occupied[0])
+        if n_occupied == 0:
+            return [], 0, 0.0
+
+        rows, cols = occupied
+        if n_occupied > max_points:
+            idx = np.random.choice(n_occupied, max_points, replace=False)
+            rows, cols = rows[idx], cols[idx]
+
+        lons_arr = env.grid.lons
+        lats_arr = env.grid.lats
+        pops = sim.N[rows, cols]
+        points = [
+            [float(lons_arr[c]), float(lats_arr[r]), float(p)]
+            for r, c, p in zip(rows, cols, pops)
+        ]
+        return points, n_occupied, float(sim.N.max())
+
+    async def prepare_multi_species_simulation(
+        self,
+        config: MultiSpeciesConfig,
+    ) -> tuple[MultiSpeciesSimulator, Environment]:
+        """Build a shared environment and a coupled multi-species simulator."""
+        logger.info(
+            "Loading environment for multi-species run",
+            region=config.region,
+            bbox=config.bbox,
+            species=[s.name for s in config.species],
+        )
+        env_data = self.climate_service.get_procedural_climate(config.bbox, config.resolution_deg)
+
+        n_rows = len(env_data["lats"])
+        n_cols = len(env_data["lons"])
+        grid = GridSpec(
+            west=config.bbox[0],
+            south=config.bbox[1],
+            east=config.bbox[2],
+            north=config.bbox[3],
+            n_rows=n_rows,
+            n_cols=n_cols,
+        )
+        env = Environment(
+            grid=grid,
+            temperature=env_data["temperature"],
+            precipitation=env_data["precipitation"],
+        )
+
+        center_lon = (config.bbox[0] + config.bbox[2]) / 2
+        center_lat = (config.bbox[1] + config.bbox[3]) / 2
+
+        sims: dict[str, Simulator] = {}
+        for sp in config.species:
+            niche = ModelNicheParams(
+                t_opt=sp.temperature_opt,
+                t_tol=sp.temperature_sigma,
+                p_opt=sp.precipitation_opt,
+                p_tol=sp.precipitation_sigma,
+                suitability_floor=sp.niche_floor,
+            )
+            demography = ModelDemographyParams(
+                r=sp.demography.r,
+                K=sp.carrying_capacity,
+                mortality=sp.demography.m,
+                allee_threshold=sp.demography.allee_threshold or 0.0,
+            )
+            dispersal = ModelDispersalParams(
+                sigma_km=sp.dispersal.sigma,
+                kernel=sp.dispersal.kernel_type,
+                fraction=sp.dispersal.fraction,
+                truncate=3.0,
+                boundary=sp.dispersal.boundary_mode,
+                jump_probability=sp.dispersal.stratified_fraction,
+                jump_distance_km=sp.dispersal.jump_distance,
+                fat_tail_alpha=sp.dispersal.alpha or 2.5,
+            )
+            species_params = SpeciesParams(
+                name=sp.name, niche=niche, demography=demography, dispersal=dispersal
+            )
+            sim = Simulator(env, species_params)
+
+            lon = sp.seed_x if sp.seed_x is not None else center_lon
+            lat = sp.seed_y if sp.seed_y is not None else center_lat
+            success = sim.seed(lon, lat, n0=sp.initial_population)
+            if not success and np.max(sim.suitability) > 0:
+                r, c = np.unravel_index(np.argmax(sim.suitability), sim.suitability.shape)
+                success = sim.seed_at(r, c, n0=sp.initial_population)
+            if not success:
+                logger.warning("Failed to seed species", species=sp.name)
+
+            sims[sp.name] = sim
+
+        interactions = [
+            InteractionEdge(affected=e.affected, other=e.other, coefficient=e.coefficient)
+            for e in config.interactions
+        ]
+        multi = MultiSpeciesSimulator(sims, interactions)
+        return multi, env
+
+    async def run_multi_species_simulation(
+        self,
+        config: MultiSpeciesConfig,
+    ) -> AsyncGenerator[MultiSpeciesProgress, None]:
+        """Run a coupled multi-species simulation, yielding progress per step."""
+        try:
+            multi, env = await self.prepare_multi_species_simulation(config)
+
+            logger.info(
+                "Multi-species simulation starting",
+                species=multi.names,
+                n_steps=config.n_steps,
+            )
+
+            for step in range(config.n_steps):
+                multi.step()
+
+                species_snapshots: dict[str, SimulationSnapshot] = {}
+                for name, sim in multi.sims.items():
+                    points, occupied_cells, max_density = self._population_points(sim, env)
+                    species_snapshots[name] = SimulationSnapshot(
+                        step=step,
+                        time=step,
+                        total_abundance=float(sim.N.sum()),
+                        occupied_cells=occupied_cells,
+                        max_density=max_density,
+                        front_distance_km=sim.metrics[-1].front_km if sim.metrics else 0.0,
+                        population_points=points,
+                    )
+
+                snapshot = MultiSpeciesSnapshot(step=step, time=step, species=species_snapshots)
+                yield MultiSpeciesProgress(
+                    step=step,
+                    total_steps=config.n_steps,
+                    percent=100.0 * step / config.n_steps,
+                    current_snapshot=snapshot,
+                )
+                await asyncio.sleep(0)  # allow cancellation
+
+            logger.info("Multi-species simulation complete", steps=config.n_steps)
+
+        except Exception as e:
+            logger.error(f"Multi-species simulation failed: {e}")
             raise
 
     def estimate_duration(self, n_steps: int, grid_size: int) -> float:

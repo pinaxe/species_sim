@@ -8,6 +8,19 @@ carrying capacity, and a normalised dispersal kernel moves individuals between
 cells each step. Streamlit front end with click-to-seed, live playback, and
 range-expansion diagnostics.
 
+**macOS**
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip3 install -r requirements.txt
+streamlit run app.py
+```
+
+(`rasterio`/`geopandas` need GDAL — if those two fail to build, run
+`brew install gdal` first and re-run `pip3 install -r requirements.txt`.)
+
+**Windows / Linux**
+
 ```
 pip install -r requirements.txt
 streamlit run app.py
