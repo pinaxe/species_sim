@@ -10,8 +10,17 @@ import pandas as pd
 from ..core.config import settings
 from ..core.logging import get_logger
 from ..models.gbif import Occurrence, OccurrenceSearchResponse
+from .climate_service import ClimateService
 
 logger = get_logger(__name__)
+
+#: Fewer than this many geolocated occurrences and a niche fit is too noisy
+#: to trust -- a handful of points can't tell a wide-ranging generalist from
+#: a narrow specialist.
+MIN_OCCURRENCES_FOR_NICHE_FIT = 5
+#: Converts an inter-quartile range to a Gaussian sigma (IQR ~= 1.349 * sigma
+#: for a normal distribution).
+_IQR_TO_SIGMA = 1.349
 
 
 class GBIFService:
@@ -20,6 +29,7 @@ class GBIFService:
     def __init__(self):
         self.api_url = settings.gbif_api_url
         self.timeout = settings.gbif_timeout
+        self.climate_service = ClimateService()
 
     async def search_taxa(self, query: str, limit: int = 10) -> list[dict]:
         """Search for taxa by scientific name."""
@@ -31,11 +41,24 @@ class GBIFService:
             resp.raise_for_status()
             data = resp.json()
             results = data.get("results", [])
-            # Transform GBIF response to match Taxon model
+            # Transform GBIF response to match Taxon model.
+            #
+            # NB: `key` is the hit's id *within whatever checklist dataset
+            # matched the search* -- occurrence records are indexed against
+            # the GBIF Backbone Taxonomy, so `/occurrence/search?taxonKey=`
+            # only returns results for the *backbone* id, `nubKey`. Several
+            # checklist entries (e.g. different regional databases) commonly
+            # resolve to the same backbone species, so dedupe on it too --
+            # otherwise a search returns the same species 2-3x.
+            seen_keys: set[int] = set()
             transformed = []
             for r in results:
+                taxon_key = r.get("nubKey") or r.get("key")
+                if taxon_key is None or taxon_key in seen_keys:
+                    continue
+                seen_keys.add(taxon_key)
                 transformed.append({
-                    "key": r.get("key"),
+                    "key": taxon_key,
                     "name": r.get("scientificName", r.get("canonicalName", "Unknown")),
                     "canonicalName": r.get("canonicalName"),
                     "rank": r.get("rank"),
@@ -53,7 +76,7 @@ class GBIFService:
         """Fetch occurrences for a taxon with optional spatial/temporal filters."""
         params = {
             "taxonKey": taxon_key,
-            "limit": min(limit, 300000),
+            "limit": min(limit, 300),  # GBIF's hard per-request page size cap
             "offset": 0,
             "hasCoordinate": True,
         }
@@ -99,10 +122,10 @@ class GBIFService:
                     occurrences.append(occ)
 
                 offset = data.get("offset", 0) + data.get("limit", 0)
-                if not data.get("endOfRecords", True):
+                if data.get("endOfRecords", True):
                     break
 
-        taxon_name = data.get("results", [{}])[0].get("scientificName", "Unknown")
+        taxon_name = occurrences[0].scientificName if occurrences else "Unknown"
 
         return OccurrenceSearchResponse(
             count=len(occurrences),
@@ -144,41 +167,50 @@ class GBIFService:
         thinned_keys = set(thinned["key"].values)
         return [o for o in occurrences if o.key in thinned_keys]
 
-    def fit_niche(self, occurrences: list[Occurrence], env_data: dict) -> dict:
-        """Fit Gaussian niche envelope from occurrence points."""
-        if not occurrences:
+    def fit_niche(self, occurrences: list[Occurrence]) -> dict:
+        """Fit a Gaussian niche envelope from real GBIF occurrences.
+
+        Evaluates the simulator's own procedural climate formula
+        (:meth:`ClimateService.climate_at_points`) directly at each
+        occurrence's coordinates -- no raster grid required, and the fitted
+        niche lines up with whatever climate a later simulation run generates
+        for the same region. The optimum is the median (robust to a handful
+        of misidentified outliers or records near cities/roads); the
+        tolerance is the inter-quartile range converted to a Gaussian sigma,
+        which is far less sensitive to outliers than the raw std deviation.
+
+        Spatially thins the occurrences first (one per ~100km cell): GBIF's
+        default result order is not a random sample, so without this a single
+        densely-monitored dataset (one herbarium, one citizen-science project)
+        can dominate the first page and make a widespread species look like a
+        narrow specialist centered on wherever that one dataset happens to sit.
+
+        Returns ``{}`` if fewer than :data:`MIN_OCCURRENCES_FOR_NICHE_FIT`
+        occurrences have coordinates -- too few points to trust a fit.
+        """
+        if len(occurrences) < MIN_OCCURRENCES_FOR_NICHE_FIT:
             return {}
 
-        lats = np.array([o.decimalLatitude for o in occurrences])
+        thinned = self.spatial_thin(occurrences, grid_size_km=100.0)
+        if len(thinned) >= MIN_OCCURRENCES_FOR_NICHE_FIT:
+            occurrences = thinned
+
         lons = np.array([o.decimalLongitude for o in occurrences])
+        lats = np.array([o.decimalLatitude for o in occurrences])
+        temps, precips = self.climate_service.climate_at_points(lons, lats)
 
-        # Extract environmental values at occurrence locations
-        temp_vals = []
-        precip_vals = []
+        def _opt_and_sigma(values: np.ndarray) -> tuple[float, float]:
+            opt = float(np.median(values))
+            q25, q75 = np.percentile(values, [25, 75])
+            sigma = max(float(q75 - q25) / _IQR_TO_SIGMA, 1e-3)
+            return opt, sigma
 
-        for lat, lon in zip(lats, lons):
-            t = self._interp_env(lon, lat, env_data.get("temperature", []))
-            p = self._interp_env(lon, lat, env_data.get("precipitation", []))
-            if t is not None and p is not None:
-                temp_vals.append(t)
-                precip_vals.append(p)
-
-        if not temp_vals or not precip_vals:
-            return {}
-
-        temp_vals = np.array(temp_vals)
-        precip_vals = np.array(precip_vals)
+        t_opt, t_sigma = _opt_and_sigma(temps)
+        p_opt, p_sigma = _opt_and_sigma(precips)
 
         return {
-            "temperature_opt": float(np.median(temp_vals)),
-            "temperature_sigma": float(np.percentile(temp_vals, 75) - np.percentile(temp_vals, 25)),
-            "precipitation_opt": float(np.median(precip_vals)),
-            "precipitation_sigma": float(np.percentile(precip_vals, 75) - np.percentile(precip_vals, 25)),
+            "temperature_opt": t_opt,
+            "temperature_sigma": t_sigma,
+            "precipitation_opt": p_opt,
+            "precipitation_sigma": p_sigma,
         }
-
-    @staticmethod
-    def _interp_env(lon: float, lat: float, grid: list[list[float]]) -> Optional[float]:
-        """Simple bilinear interpolation on a lat/lon grid."""
-        if not grid or not grid[0]:
-            return None
-        return np.mean(grid)  # Placeholder

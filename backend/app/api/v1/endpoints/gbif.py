@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.models.gbif import NicheParams, OccurrenceSearchRequest, OccurrenceSearchResponse, Taxon
-from app.services.gbif_service import GBIFService
+from app.services.gbif_service import MIN_OCCURRENCES_FOR_NICHE_FIT, GBIFService
 
 router = APIRouter(prefix="/gbif", tags=["GBIF"])
 gbif_service = GBIFService()
@@ -64,19 +64,25 @@ async def thin_occurrences(
 async def fit_niche_from_occurrences(
     request: OccurrenceSearchRequest,
 ) -> NicheParams:
-    """Fit niche envelope from occurrence data."""
+    """Fit a niche envelope from a species' real GBIF occurrence records."""
     try:
         response = await gbif_service.search_occurrences(
             taxon_key=request.taxon_key,
             limit=request.limit,
             geometry=request.geometry,
         )
-
-        # Fit niche from occurrences
-        niche = gbif_service.fit_niche(response.results, {})
-        if not niche:
-            raise ValueError("Could not fit niche from occurrences")
-
-        return NicheParams(**niche)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=502, detail=f"GBIF lookup failed: {e}")
+
+    niche = gbif_service.fit_niche(response.results)
+    if not niche:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Only {response.count} geolocated occurrence(s) found "
+                f"(need at least {MIN_OCCURRENCES_FOR_NICHE_FIT}) -- "
+                "can't fit a reliable niche for this species"
+            ),
+        )
+
+    return NicheParams(**niche)

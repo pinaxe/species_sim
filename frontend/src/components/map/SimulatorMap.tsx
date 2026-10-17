@@ -73,11 +73,13 @@ export default function SimulatorMap({
         zoom: 3,
       });
 
-      // Set mapReady after a short delay to ensure rendering
-      const timer = setTimeout(() => {
+      // Only safe to addSource/addLayer once the style has actually finished
+      // loading -- a flat setTimeout raced this on slower connections and
+      // threw "Style is not done loading." from the population-layer effect.
+      map.current.on('load', () => {
         setMapReady(true);
         console.log('Map initialized');
-      }, 1000);
+      });
 
       map.current.on('error', (e: any) => {
         console.error('Map error:', e);
@@ -85,7 +87,6 @@ export default function SimulatorMap({
       });
 
       return () => {
-        clearTimeout(timer);
         if (map.current) {
           try {
             map.current.remove();

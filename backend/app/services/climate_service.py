@@ -61,6 +61,31 @@ class ClimateService:
             "lons": lons,
         }
 
+    def climate_at_points(
+        self, lons: np.ndarray, lats: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Evaluate the *deterministic* part of the procedural climate model at
+        arbitrary (lon, lat) points -- no grid, no per-cell noise.
+
+        This is the same formula :meth:`get_procedural_climate` grids up for a
+        simulation run, minus the random jitter: niche-fitting wants the
+        central climate a species actually experiences at its real occurrence
+        coordinates, not one noisy draw of the grid. Keeping the formula
+        identical (mean of the noise terms folded in as a constant) means a
+        niche fitted here lines up with whatever a later simulation run
+        generates for the same region.
+        """
+        lons = np.asarray(lons, dtype=np.float64)
+        lats = np.asarray(lats, dtype=np.float64)
+
+        temperature = 25.0 - (lats ** 2) / 50.0
+
+        distance_to_coast = np.abs(lats - 30) + np.abs(lons - 0)
+        precipitation = 1000 * np.exp(-distance_to_coast / 20) + 200.0  # +200 = noise mean
+        precipitation = np.clip(precipitation, 100, 3000)
+
+        return temperature, precipitation
+
     def clip_raster(
         self,
         layer_name: str,

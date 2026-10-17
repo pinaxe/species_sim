@@ -138,11 +138,12 @@ INTERACTION_PRESETS: Dict[str, Tuple[List[SpeciesParams], List[InteractionEdge]]
             SpeciesParams(
                 name="Fox",
                 niche=NicheParams(t_opt=14.0, t_tol=15.0, p_opt=900.0, p_tol=900.0),
-                demography=DemographyParams(r=0.08, K=300.0, mortality=0.12),
+                demography=DemographyParams(r=0.15, K=300.0, mortality=0.17),
                 dispersal=DispersalParams(sigma_km=35.0, kernel="exponential", fraction=0.4),
                 notes="Slow-breeding predator: its own logistic term keeps it "
                       "bounded even before predation is considered, but without "
-                      "rabbits to eat its high mortality drives it to extinction.",
+                      "rabbits to eat its mortality exceeding its growth rate "
+                      "drives it to extinction (try it alone and watch it fade).",
             ),
         ],
         [
@@ -150,8 +151,13 @@ INTERACTION_PRESETS: Dict[str, Tuple[List[SpeciesParams], List[InteractionEdge]]
             InteractionEdge(affected="Rabbit", other="Fox", coefficient=-0.9),
             # Foxes gain growth in proportion to rabbit density, scaled down by
             # a conversion efficiency (most eaten biomass isn't converted to
-            # new foxes).
-            InteractionEdge(affected="Fox", other="Rabbit", coefficient=0.25),
+            # new foxes). Tuned so the payoff is visible within ~100 steps:
+            # with a smaller coefficient here the fox's intrinsic deficit
+            # (mortality > r) dominates for 150+ steps before local rabbit
+            # density gets high enough to flip it positive -- technically
+            # correct Lotka-Volterra lag, but it reads as "the predator is
+            # dying" in any normal-length demo run.
+            InteractionEdge(affected="Fox", other="Rabbit", coefficient=0.6),
         ],
     ),
     "Lynx and snowshoe hare": (
@@ -167,7 +173,7 @@ INTERACTION_PRESETS: Dict[str, Tuple[List[SpeciesParams], List[InteractionEdge]]
             SpeciesParams(
                 name="Lynx",
                 niche=NicheParams(t_opt=0.0, t_tol=12.0, p_opt=600.0, p_tol=450.0),
-                demography=DemographyParams(r=0.1, K=200.0, mortality=0.15),
+                demography=DemographyParams(r=0.18, K=200.0, mortality=0.2),
                 dispersal=DispersalParams(sigma_km=40.0, kernel="exponential", fraction=0.35),
                 notes="Specialist predator: strong coupling to hare density "
                       "produces the ~10-year boom-bust cycle seen in the field data.",
@@ -175,7 +181,8 @@ INTERACTION_PRESETS: Dict[str, Tuple[List[SpeciesParams], List[InteractionEdge]]
         ],
         [
             InteractionEdge(affected="Snowshoe hare", other="Lynx", coefficient=-1.1),
-            InteractionEdge(affected="Lynx", other="Snowshoe hare", coefficient=0.3),
+            # See the note on the fox/rabbit coefficient above -- same reasoning.
+            InteractionEdge(affected="Lynx", other="Snowshoe hare", coefficient=0.6),
         ],
     ),
 }

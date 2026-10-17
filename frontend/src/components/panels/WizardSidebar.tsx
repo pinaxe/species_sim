@@ -1,10 +1,19 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronRight, Zap, Search, Globe, Users } from 'lucide-react';
-import { MultiSpeciesConfig, SimulationConfig, Taxon } from '@/lib/types';
+import { ChevronRight, Zap, Search, Globe, Users, Leaf } from 'lucide-react';
+import { MultiSpeciesConfig, NicheParams, SimulationConfig, Taxon } from '@/lib/types';
 import { bioSimAPI } from '@/lib/api';
 import MultiSpeciesBuilder from './MultiSpeciesBuilder';
+
+const DEFAULT_NICHE = {
+  temperature_opt: 15,
+  temperature_sigma: 15,
+  precipitation_opt: 1000,
+  precipitation_sigma: 500,
+};
+
+type NicheFitStatus = 'idle' | 'fitting' | 'fitted' | 'failed';
 
 interface Region {
   id: string;
@@ -81,6 +90,9 @@ export default function WizardSidebar({
   const [selectedSpecies, setSelectedSpecies] = useState<Taxon | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [selectedRegion, setSelectedRegion] = useState<Region>(REGIONS[0]);
+  const [fittedNiche, setFittedNiche] = useState<NicheParams | null>(null);
+  const [nicheFitStatus, setNicheFitStatus] = useState<NicheFitStatus>('idle');
+  const [nicheFitMessage, setNicheFitMessage] = useState('');
 
   // Search species when query changes
   useEffect(() => {
@@ -109,6 +121,36 @@ export default function WizardSidebar({
     setSelectedSpecies(species);
     setSearchQuery('');
     setSearchResults([]);
+    setFittedNiche(null);
+    setNicheFitStatus('fitting');
+    setNicheFitMessage('');
+
+    // Fit a real niche from this species' actual GBIF occurrences, falling
+    // back to the generic defaults if there aren't enough geolocated records.
+    // Guard against a stale response landing after the user picks another
+    // species by checking selectedSpecies is still this one when it resolves.
+    bioSimAPI
+      .fitNiche(species.key, 1500)
+      .then((niche) => {
+        setSelectedSpecies((current) => {
+          if (current?.key === species.key) {
+            setFittedNiche(niche);
+            setNicheFitStatus('fitted');
+          }
+          return current;
+        });
+      })
+      .catch((error) => {
+        setSelectedSpecies((current) => {
+          if (current?.key === species.key) {
+            setNicheFitStatus('failed');
+            setNicheFitMessage(
+              error?.response?.data?.detail || 'Not enough GBIF records to fit a real niche',
+            );
+          }
+          return current;
+        });
+      });
   };
 
   const handleSelectRegion = (region: Region) => {
@@ -116,15 +158,16 @@ export default function WizardSidebar({
   };
 
   const handleRunSimulation = () => {
+    const niche = fittedNiche || DEFAULT_NICHE;
     const config: SimulationConfig = {
       region: selectedRegion.id,
       species_name: selectedSpecies?.name || 'Demo Species',
       bbox: selectedRegion.bbox,
       resolution_deg: 0.25,
-      temperature_opt: 15,
-      temperature_sigma: 15,
-      precipitation_opt: 1000,
-      precipitation_sigma: 500,
+      temperature_opt: niche.temperature_opt,
+      temperature_sigma: niche.temperature_sigma,
+      precipitation_opt: niche.precipitation_opt,
+      precipitation_sigma: niche.precipitation_sigma,
       niche_floor: 0.01,
       carrying_capacity: 1000,
       demography: { r: 0.1, m: 0.05 },
@@ -207,10 +250,28 @@ export default function WizardSidebar({
               </div>
 
               {selectedSpecies && (
-                <div className="p-2 bg-emerald-900 bg-opacity-30 rounded border border-emerald-600">
+                <div className="p-2 bg-emerald-900 bg-opacity-30 rounded border border-emerald-600 space-y-1.5">
                   <p className="text-sm font-semibold text-emerald-300">{selectedSpecies.name}</p>
                   {selectedSpecies.canonicalName && (
                     <p className="text-xs text-slate-400">{selectedSpecies.canonicalName}</p>
+                  )}
+
+                  {nicheFitStatus === 'fitting' && (
+                    <p className="text-xs text-slate-400 animate-pulse flex items-center gap-1.5">
+                      <Leaf className="w-3 h-3" /> Fitting niche from real GBIF occurrences...
+                    </p>
+                  )}
+                  {nicheFitStatus === 'fitted' && fittedNiche && (
+                    <p className="text-xs text-emerald-200 flex items-center gap-1.5">
+                      <Leaf className="w-3 h-3 flex-shrink-0" />
+                      Real niche: {fittedNiche.temperature_opt.toFixed(1)}°C ·{' '}
+                      {fittedNiche.precipitation_opt.toFixed(0)}mm optimum
+                    </p>
+                  )}
+                  {nicheFitStatus === 'failed' && (
+                    <p className="text-xs text-slate-400">
+                      {nicheFitMessage || 'Could not fit a real niche'} -- using generic defaults.
+                    </p>
                   )}
                 </div>
               )}
